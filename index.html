@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>필름 절단 최적화</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background-color: #f9fafb;
+            color: #374151;
+        }
+        .container {
+            max-width: 1024px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-green { background: #10b981; color: white; }
+        .btn-orange { background: #f59e0b; color: white; }
+        .btn-red { background: #ef4444; color: white; }
+        .btn-gray { background: #6b7280; color: white; }
+        .btn-purple { background: #8b5cf6; color: white; }
+        .input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .grid { display: grid; gap: 16px; }
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+        @media (max-width: 640px) {
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+        }
+        .hidden { display: none; }
+        .flex { display: flex; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .text-center { text-align: center; }
+        .text-sm { font-size: 12px; }
+        .text-lg { font-size: 18px; }
+        .font-bold { font-weight: bold; }
+        .font-medium { font-weight: 500; }
+        .mb-2 { margin-bottom: 8px; }
+        .mb-3 { margin-bottom: 12px; }
+        .mb-4 { margin-bottom: 16px; }
+        .mt-4 { margin-top: 16px; }
+        .p-2 { padding: 8px; }
+        .p-3 { padding: 12px; }
+        .rounded-lg { border-radius: 8px; }
+        .bg-gray-50 { background: #f9fafb; }
+        .bg-blue-50 { background: #eff6ff; }
+        .bg-yellow-50 { background: #fefce8; }
+        .text-gray-600 { color: #4b5563; }
+        .text-red-500 { color: #ef4444; }
+        .loading {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .api-setup {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script type="text/babel">
+        const { useState, useRef } = React;
+
+        const App = () => {
+            const [filmSizes, setFilmSizes] = useState([]);
+            const [optimizedLayout, setOptimizedLayout] = useState(null);
+            const [showSettings, setShowSettings] = useState(false);
+            const [showManualInput, setShowManualInput] = useState(false);
+            const [rollWidth, setRollWidth] = useState(1200);
+            const [rollHeight, setRollHeight] = useState(50000);
+            const [pageHeight, setPageHeight] = useState(2500);
+            const [manualWidth, setManualWidth] = useState('');
+            const [manualHeight, setManualHeight] = useState('');
+            const [manualQuantity, setManualQuantity] = useState('1');
+            const [currentPage, setCurrentPage] = useState(0);
+            const [zoomLevel, setZoomLevel] = useState(1);
+            const [pageOpacity, setPageOpacity] = useState(0);
+            const [mode, setMode] = useState('efficiency');
+            const [cuttingBalance, setCuttingBalance] = useState(2);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [apiKey, setApiKey] = useState('');
+            const [showApiSetup, setShowApiSetup] = useState(false);
+            const fileInputRef = useRef(null);
+
+            const imageToBase64 = (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result.split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+            };
+
+            const parseText = (text) => {
+                const sizes = [];
+                console.log('=== OCR 텍스트 분석 시작 ===');
+                console.log('원본 텍스트:', text);
+                console.log('텍스트 길이:', text.length);
+                
+                // 텍스트 전처리 - 더 강력하게
+                let cleanText = text
+                    .replace(/[|l1]/g, '1')  // 세로선, l, 1 통합
+                    .replace(/[o0O]/g, '0')  // o, 0, O 통합
+                    .replace(/[×xX*]/g, 'x') // 곱하기 기호 통합
+                    .replace(/[–—-]/g, '-')  // 대시 통합
+                    .replace(/[，,]/g, ',')  // 쉼표 통합
+                    .replace(/[：:]/g, ':')  // 콜론 통합
+                    .replace(/\s+/g, ' ')    // 공백 정리
+                    .trim();
+
+                console.log('전처리된 텍스트:', cleanText);
+
+                // 줄별로 분리해서 분석
+                const lines = text.split(/[\n\r]+/).map(line => line.trim()).filter(line => line);
+                console.log('줄별 분석:', lines);
+
+                // 모든 숫자 추출
+                const allNumbers = [];
+                const numberPattern = /\d+/g;
+                let match;
+                while ((match = numberPattern.exec(text)) !== null) {
+                    const num = parseInt(match[0]);
+                    if (num >= 1 && num <= 50000) { // 매우 넓은 범위
+                        allNumbers.push({
+                            value: num,
+                            position: match.index,
+                            original: match[0]
+                        });
+                    }
+                }
+                console.log('발견된 모든 숫자:', allNumbers);
+
+                // 패턴 1: 정규식 패턴들 (기존 + 확장)
+                const patterns = [
+                    // 기본 곱하기 패턴들
+                    { regex: /(\d+)\s*[×xX*]\s*(\d+)\s*(\d+)\s*개/gi, name: '곱하기+개' },
+                    { regex: /(\d+)\s*[×xX*]\s*(\d+)\s*[-–—]\s*(\d+)\s*개/gi, name: '곱하기-개' },
+                    { regex: /(\d+)\s*[×xX*]\s*(\d+)\s*\((\d+)\)/gi, name: '곱하기()' },
+                    { regex: /(\d+)\s*[×xX*]\s*(\d+)\s*\[(\d+)\]/gi, name: '곱하기[]' },
+                    { regex: /(\d+)\s*[×xX*]\s*(\d+)\s*{(\d+)}/gi, name: '곱하기{}' },
+                    
+                    // 한글 패턴들
+                    { regex: /가로\s*(\d+).*?세로\s*(\d+).*?수량\s*(\d+)/gi, name: '가로세로' },
+                    { regex: /폭\s*(\d+).*?높이\s*(\d+).*?(\d+)\s*개/gi, name: '폭높이' },
+                    { regex: /너비\s*(\d+).*?길이\s*(\d+).*?(\d+)\s*개/gi, name: '너비길이' },
+                    { regex: /크기\s*(\d+)\s*(\d+)\s*(\d+)/gi, name: '크기' },
+                    
+                    // 단위 포함 패턴들
+                    { regex: /(\d+)mm?\s*[×xX*]\s*(\d+)mm?\s*(\d+)\s*개/gi, name: 'mm단위' },
+                    { regex: /(\d+)cm\s*[×xX*]\s*(\d+)cm\s*(\d+)\s*개/gi, name: 'cm단위' },
+                    
+                    // 구분자 패턴들  
+                    { regex: /(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g, name: '쉼표구분' },
+                    { regex: /(\d+)\s*[:：]\s*(\d+)\s*[:：]\s*(\d+)/g, name: '콜론구분' },
+                    { regex: /(\d+)\s*[/]\s*(\d+)\s*[/]\s*(\d+)/g, name: '슬래시구분' },
+                    { regex: /(\d+)\s*[.]\s*(\d+)\s*[.]\s*(\d+)/g, name: '점구분' },
+                    { regex: /(\d+)\s*[-]\s*(\d+)\s*[-]\s*(\d+)/g, name: '하이픈구분' },
+                    
+                    // 공백 패턴들 (유연하게)
+                    { regex: /(\d{2,4})\s+(\d{2,4})\s+(\d{1,3})(?=\s|$|개|장|매)/g, name: '공백구분' },
+                    { regex: /(\d{2,4})\s{2,}(\d{2,4})\s{2,}(\d{1,3})/g, name: '넓은공백' },
+                    
+                    // 다국어 패턴들
+                    { regex: /(\d+)\s*[×xX*]\s*(\d+)\s*(\d+)\s*[장매枚張pcs]/gi, name: '다국어단위' },
+                    
+                    // 특수 패턴들
+                    { regex: /(\d+)\s*by\s*(\d+)\s*(\d+)/gi, name: 'by패턴' },
+                    { regex: /(\d+)\s*times\s*(\d+)\s*(\d+)/gi, name: 'times패턴' },
+                    
+                    // 매우 유연한 패턴들
+                    { regex: /(\d{2,4}).*?(\d{2,4}).*?(\d{1,3})/g, name: '초유연패턴' }
+                ];
+
+                patterns.forEach((pattern, index) => {
+                    console.log(`패턴 ${index + 1} (${pattern.name}) 검사...`);
+                    const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
+                    let match;
+                    
+                    while ((match = regex.exec(cleanText)) !== null) {
+                        console.log(`패턴 매치:`, match);
+                        const width = parseInt(match[1]);
+                        const height = parseInt(match[2]);
+                        const quantity = parseInt(match[3]);
+                        
+                        // 더 관대한 유효성 검사
+                        if (width >= 5 && width <= 8000 && 
+                            height >= 5 && height <= 15000 && 
+                            quantity >= 1 && quantity <= 500) {
+                            console.log(`✅ 유효한 사이즈: ${width}×${height} ${quantity}개`);
+                            sizes.push({ width, height, quantity });
+                        } else {
+                            console.log(`❌ 범위초과: ${width}×${height} ${quantity}개`);
+                        }
+                    }
+                });
+
+                // 패턴 2: 줄별 숫자 분석 (세로 배치)
+                console.log('\n=== 줄별 숫자 분석 ===');
+                const lineNumbers = [];
+                lines.forEach((line, i) => {
+                    const nums = line.match(/\d+/g);
+                    if (nums && nums.length > 0) {
+                        lineNumbers.push({
+                            line: i,
+                            numbers: nums.map(n => parseInt(n)),
+                            text: line
+                        });
+                        console.log(`${i}번 줄: [${nums.join(', ')}] "${line}"`);
+                    }
+                });
+
+                // 연속된 줄에서 숫자 조합 찾기
+                for (let i = 0; i < lineNumbers.length - 2; i++) {
+                    const line1 = lineNumbers[i];
+                    const line2 = lineNumbers[i + 1];
+                    const line3 = lineNumbers[i + 2];
+                    
+                    // 각 줄에서 가장 적절한 숫자 선택
+                    line1.numbers.forEach(width => {
+                        line2.numbers.forEach(height => {
+                            line3.numbers.forEach(quantity => {
+                                if (width >= 20 && width <= 5000 && 
+                                    height >= 20 && height <= 10000 && 
+                                    quantity >= 1 && quantity <= 100) {
+                                    console.log(`✅ 세로배치 발견: ${width}×${height} ${quantity}개`);
+                                    sizes.push({ width, height, quantity });
+                                }
+                            });
+                        });
+                    });
+                }
+
+                // 패턴 3: 스마트 숫자 조합 (AI식 추론)
+                console.log('\n=== 스마트 숫자 조합 분석 ===');
+                if (allNumbers.length >= 3) {
+                    // 3개씩 연속으로 조합해보기
+                    for (let i = 0; i < allNumbers.length - 2; i++) {
+                        const num1 = allNumbers[i].value;
+                        const num2 = allNumbers[i + 1].value;
+                        const num3 = allNumbers[i + 2].value;
+                        
+                        // 패턴 추론: 어떤 것이 가로, 세로, 수량인지 판단
+                        const combinations = [
+                            { width: num1, height: num2, quantity: num3 },
+                            { width: num1, height: num3, quantity: num2 },
+                            { width: num2, height: num1, quantity: num3 },
+                            { width: num2, height: num3, quantity: num1 },
+                            { width: num3, height: num1, quantity: num2 },
+                            { width: num3, height: num2, quantity: num1 }
+                        ];
+                        
+                        combinations.forEach(combo => {
+                            const { width, height, quantity } = combo;
+                            
+                            // 논리적 유효성 검사
+                            const isValidSize = width >= 50 && width <= 5000 && 
+                                              height >= 50 && height <= 10000;
+                            const isValidQuantity = quantity >= 1 && quantity <= 100;
+                            const isReasonableRatio = Math.max(width, height) / Math.min(width, height) <= 50;
+                            
+                            if (isValidSize && isValidQuantity && isReasonableRatio) {
+                                console.log(`✅ 스마트조합: ${width}×${height} ${quantity}개`);
+                                sizes.push({ width, height, quantity });
+                            }
+                        });
+                    }
+                }
+
+                // 패턴 4: 단일 줄에서 여러 숫자 추출
+                console.log('\n=== 단일 줄 다중 숫자 분석 ===');
+                lines.forEach((line, lineIndex) => {
+                    const nums = line.match(/\d+/g);
+                    if (nums && nums.length >= 3) {
+                        console.log(`${lineIndex}번 줄에서 ${nums.length}개 숫자 발견:`, nums);
+                        
+                        // 3개씩 그룹으로 처리
+                        for (let i = 0; i < nums.length - 2; i += 3) {
+                            const width = parseInt(nums[i]);
+                            const height = parseInt(nums[i + 1]);
+                            const quantity = parseInt(nums[i + 2]);
+                            
+                            if (width >= 30 && width <= 5000 && 
+                                height >= 30 && height <= 10000 && 
+                                quantity >= 1 && quantity <= 100) {
+                                console.log(`✅ 한줄조합: ${width}×${height} ${quantity}개`);
+                                sizes.push({ width, height, quantity });
+                            }
+                        }
+                    }
+                });
+
+                // 중복 제거 및 정렬
+                const uniqueSizes = [];
+                sizes.forEach(size => {
+                    const exists = uniqueSizes.find(s => 
+                        Math.abs(s.width - size.width) <= 5 && 
+                        Math.abs(s.height - size.height) <= 5 && 
+                        s.quantity === size.quantity
+                    );
+                    if (!exists) {
+                        uniqueSizes.push(size);
+                    }
+                });
+
+                // 신뢰도 순으로 정렬 (일반적인 사이즈 우선)
+                uniqueSizes.sort((a, b) => {
+                    const scoreA = (a.width * a.height) / 1000000; // 면적 기준
+                    const scoreB = (b.width * b.height) / 1000000;
+                    return scoreB - scoreA;
+                });
+
+                console.log('\n=== 최종 결과 ===');
+                console.log('최종 인식된 사이즈들:', uniqueSizes);
+                
+                return uniqueSizes.slice(0, 20); // 최대 20개까지만
+            };
+
+            const processOCR = async (imageFile) => {
+                if (!apiKey) {
+                    alert('API 키를 먼저 설정해주세요.');
+                    setShowApiSetup(true);
+                    return;
+                }
+
+                try {
+                    setIsProcessing(true);
+                    const base64Image = await imageToBase64(imageFile);
+                    
+                    const response = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            requests: [{
+                                image: { content: base64Image },
+                                features: [{ type: 'TEXT_DETECTION', maxResults: 10 }]
+                            }]
+                        })
+                    });
+
+                    if (!response.ok) {
+                        let errorMessage = `API 오류: ${response.status}`;
+                        
+                        if (response.status === 403) {
+                            errorMessage = 'API 권한 오류 (403)\n\n해결 방법:\n1. Google Cloud Console에서 Vision API 활성화\n2. 결제 계정 연결\n3. API 키 제한사항에서 키 제한 안함 선택\n4. 새 API 키 생성';
+                        } else if (response.status === 400) {
+                            errorMessage = '잘못된 API 키이거나 요청 형식 오류입니다.';
+                        } else if (response.status === 429) {
+                            errorMessage = 'API 사용량 한도 초과. 잠시 후 다시 시도해주세요.';
+                        }
+                        
+                        throw new Error(errorMessage);
+                    }
+
+                    const result = await response.json();
+                    
+                    if (result.responses && result.responses[0] && result.responses[0].textAnnotations) {
+                        const text = result.responses[0].textAnnotations[0].description;
+                        console.log('=== OCR 원본 결과 ===');
+                        console.log('전체 텍스트:', text);
+                        console.log('문자 길이:', text.length);
+                        console.log('포함된 숫자들:', text.match(/\d+/g) || []);
+                        
+                        const sizes = parseText(text);
+                        
+                        if (sizes.length > 0) {
+                            const newSizes = sizes.map((size, i) => ({
+                                id: Date.now() + i,
+                                ...size,
+                                color: `hsl(${Math.random() * 360}, 70%, 80%)`
+                            }));
+                            setFilmSizes(prev => [...prev, ...newSizes]);
+                            
+                            const sizeList = sizes.map(s => `• ${s.width}×${s.height}mm ${s.quantity}개`).join('\n');
+                            alert(`🎉 ${sizes.length}개의 사이즈를 인식했습니다!\n\n${sizeList}\n\n💡 더 많은 사이즈가 있다면 다시 촬영해보세요.`);
+                        } else {
+                            // 더 자세한 실패 분석
+                            const numbers = text.match(/\d+/g) || [];
+                            const hasNumbers = numbers.length > 0;
+                            const hasEnoughNumbers = numbers.length >= 3;
+                            
+                            let helpMessage = '📝 사이즈 정보를 찾을 수 없습니다.\n\n';
+                            
+                            if (!hasNumbers) {
+                                helpMessage += '❌ 숫자가 전혀 인식되지 않았습니다.\n\n';
+                                helpMessage += '🔧 해결방법:\n';
+                                helpMessage += '• 더 밝은 조명에서 촬영\n';
+                                helpMessage += '• 글씨를 더 크고 진하게\n';
+                                helpMessage += '• 카메라를 더 가까이\n';
+                                helpMessage += '• 손떨림 방지\n';
+                            } else if (!hasEnoughNumbers) {
+                                helpMessage += `⚠️ 숫자는 ${numbers.length}개 발견되었지만 부족합니다.\n`;
+                                helpMessage += `발견된 숫자: ${numbers.join(', ')}\n\n`;
+                                helpMessage += '💡 가로×세로×수량 = 최소 3개 숫자가 필요합니다.\n';
+                            } else {
+                                helpMessage += `✅ 숫자는 ${numbers.length}개 발견되었습니다.\n`;
+                                helpMessage += `발견된 숫자: ${numbers.join(', ')}\n\n`;
+                                helpMessage += '❌ 하지만 인식 가능한 패턴이 없습니다.\n\n';
+                                helpMessage += '📝 이렇게 써보세요:\n';
+                                helpMessage += `• "${numbers[0] || '450'}×${numbers[1] || '1600'} ${numbers[2] || '3'}개"\n`;
+                                helpMessage += `• "${numbers[0] || '450'} ${numbers[1] || '1600'} ${numbers[2] || '3'}"\n`;
+                                helpMessage += `• "가로${numbers[0] || '450'} 세로${numbers[1] || '1600'} 수량${numbers[2] || '3'}"\n`;
+                            }
+                            
+                            const preview = text.length > 150 ? text.substring(0, 150) + '...' : text;
+                            helpMessage += `\n📋 인식된 전체 텍스트:\n"${preview}"`;
+                            
+                            // 수동 입력 제안
+                            if (hasEnoughNumbers) {
+                                const suggestedWidth = numbers[0];
+                                const suggestedHeight = numbers[1];
+                                const suggestedQuantity = numbers[2];
+                                
+                                helpMessage += `\n\n💡 수동 입력 제안:\n가로: ${suggestedWidth}, 세로: ${suggestedHeight}, 수량: ${suggestedQuantity}`;
+                                
+                                // 자동으로 수동 입력 폼에 값 설정
+                                setManualWidth(suggestedWidth);
+                                setManualHeight(suggestedHeight);
+                                setManualQuantity(suggestedQuantity);
+                                setShowManualInput(true);
+                            }
+                            
+                            alert(helpMessage);
+                        }
+                    } else if (result.responses && result.responses[0] && result.responses[0].error) {
+                        throw new Error(`Vision API 오류: ${result.responses[0].error.message}`);
+                    } else {
+                        alert('📷 이미지에서 텍스트를 인식할 수 없습니다.\n\n촬영 가이드:\n• 📱 세로 방향으로 촬영\n• 💡 밝은 조명 (형광등/LED)\n• 📏 가까이서 큰 글씨로\n• ✏️ 진한 펜으로 또박또박\n• 📄 깔끔한 흰 배경\n• 🎯 글씨만 화면에 가득');
+                    }
+                } catch (error) {
+                    console.error('OCR 오류:', error);
+                    alert(error.message);
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
+            const addSample = () => {
+                const samples = [
+                    { width: 450, height: 1600, quantity: 3 },
+                    { width: 700, height: 500, quantity: 3 },
+                    { width: 600, height: 3200, quantity: 2 },
+                    { width: 120, height: 3500, quantity: 2 },
+                    { width: 150, height: 2400, quantity: 5 },
+                    { width: 800, height: 4000, quantity: 1 }
+                ];
+                setFilmSizes(samples.map((item, i) => ({
+                    id: Date.now() + i,
+                    ...item,
+                    color: `hsl(${Math.random() * 360}, 70%, 80%)`
+                })));
+            };
+
+            const addManual = () => {
+                if (manualWidth && manualHeight) {
+                    setFilmSizes(prev => [...prev, {
+                        id: Date.now(),
+                        width: parseInt(manualWidth),
+                        height: parseInt(manualHeight),
+                        quantity: parseInt(manualQuantity),
+                        color: `hsl(${Math.random() * 360}, 70%, 80%)`
+                    }]);
+                    setManualWidth('');
+                    setManualHeight('');
+                    setManualQuantity('1');
+                }
+            };
+
+            const handleImageUpload = async (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    await processOCR(file);
+                }
+                event.target.value = '';
+            };
+
+            const optimize = () => {
+                if (filmSizes.length === 0) return;
+
+                const pieces = [];
+                filmSizes.forEach(size => {
+                    for (let i = 0; i < size.quantity; i++) {
+                        pieces.push({
+                            ...size,
+                            pieceId: `${size.id}-${i+1}`,
+                            placed: false
+                        });
+                    }
+                });
+
+                pieces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+                const placedPieces = [];
+                const occupiedAreas = [];
+
+                const isOccupied = (x, y, w, h) => {
+                    return occupiedAreas.some(area => 
+                        !(x >= area.x + area.width || x + w <= area.x || 
+                          y >= area.y + area.height || y + h <= area.y)
+                    );
+                };
+
+                const findPosition = (piece) => {
+                    if (piece.width > rollWidth) return null;
+                    let bestPos = null;
+                    let bestScore = Infinity;
+
+                    for (let y = 0; y <= rollHeight - piece.height; y += 5) {
+                        for (let x = 0; x <= rollWidth - piece.width; x += 5) {
+                            if (!isOccupied(x, y, piece.width, piece.height)) {
+                                let score = y * 1000 + x;
+                                if (y === 0) score -= 5000;
+                                
+                                occupiedAreas.forEach(area => {
+                                    if (Math.abs(y - (area.y + area.height)) < 10 && 
+                                        x < area.x + area.width && x + piece.width > area.x) {
+                                        score -= 3000;
+                                    }
+                                    if (Math.abs(x - (area.x + area.width)) < 10 && 
+                                        y < area.y + area.height && y + piece.height > area.y) {
+                                        score -= 2000;
+                                    }
+                                });
+
+                                if (score < bestScore) {
+                                    bestScore = score;
+                                    bestPos = { x, y };
+                                }
+                            }
+                        }
+                    }
+                    return bestPos;
+                };
+
+                pieces.forEach(piece => {
+                    const pos = findPosition(piece);
+                    if (pos && pos.y + piece.height <= rollHeight) {
+                        placedPieces.push({
+                            ...piece,
+                            x: pos.x,
+                            y: pos.y,
+                            placed: true
+                        });
+                        occupiedAreas.push({
+                            x: pos.x,
+                            y: pos.y,
+                            width: piece.width,
+                            height: piece.height
+                        });
+                    }
+                });
+
+                const totalHeight = Math.max(...placedPieces.map(p => p.y + p.height), 0);
+                const totalArea = pieces.reduce((sum, p) => sum + (p.width * p.height), 0);
+                const usedArea = rollWidth * totalHeight;
+                const efficiency = usedArea > 0 ? (totalArea / usedArea * 100) : 0;
+
+                setOptimizedLayout({
+                    pieces: placedPieces,
+                    totalUsedHeight: totalHeight,
+                    remaining: rollHeight - totalHeight,
+                    efficiency: efficiency.toFixed(1),
+                    placedCount: placedPieces.length,
+                    totalCount: pieces.length
+                });
+                setCurrentPage(0);
+            };
+
+            const totalPages = optimizedLayout ? Math.ceil(optimizedLayout.totalUsedHeight / pageHeight) : 0;
+            const pageStart = currentPage * pageHeight;
+            const pageEnd = (currentPage + 1) * pageHeight;
+            const currentPieces = optimizedLayout ? 
+                optimizedLayout.pieces.filter(p => p.y < pageEnd && p.y + p.height > pageStart) : [];
+
+            return React.createElement('div', { className: 'container' },
+                // API 설정
+                showApiSetup && React.createElement('div', { className: 'api-setup' },
+                    React.createElement('h2', { className: 'text-lg font-bold mb-3' }, '🔑 Google Vision API 설정'),
+                    React.createElement('p', { className: 'text-sm mb-3' }, '실제 사진 인식을 위해 API 키가 필요합니다.'),
+                    React.createElement('div', { className: 'mb-3 text-sm' },
+                        React.createElement('p', null, React.createElement('strong', null, '🚀 설정 방법:')),
+                        React.createElement('p', null, '1. Google Cloud Console → 새 프로젝트'),
+                        React.createElement('p', null, '2. Vision API 활성화'),
+                        React.createElement('p', null, '3. API 키 생성'),
+                        React.createElement('p', null, '4. 결제 계정 연결 (무료 사용량)')
+                    ),
+                    React.createElement('div', { className: 'flex gap-2 mb-2' },
+                        React.createElement('input', {
+                            type: 'password',
+                            value: apiKey,
+                            onChange: (e) => setApiKey(e.target.value),
+                            placeholder: 'API 키를 입력하세요',
+                            className: 'input flex-1',
+                            style: { color: '#374151' }
+                        }),
+                        React.createElement('button', {
+                            onClick: () => {
+                                if (apiKey.trim()) {
+                                    setShowApiSetup(false);
+                                    alert('✅ API 키가 설정되었습니다!');
+                                } else {
+                                    alert('API 키를 입력해주세요.');
+                                }
+                            },
+                            className: 'btn btn-primary'
+                        }, '저장')
+                    ),
+                    React.createElement('button', {
+                        onClick: () => setShowApiSetup(false),
+                        className: 'text-sm',
+                        style: { textDecoration: 'underline' }
+                    }, '나중에 설정하기')
+                ),
+
+                // 메인 카드
+                React.createElement('div', { className: 'card' },
+                    React.createElement('h1', { className: 'text-lg font-bold mb-4 text-center' }, '필름 절단 최적화 (OCR 지원)'),
+                    
+                    React.createElement('div', { className: 'flex items-center gap-2 mb-4' },
+                        React.createElement('button', {
+                            onClick: () => setShowSettings(!showSettings),
+                            className: 'btn btn-primary'
+                        }, '⚙️ 설정'),
+                        React.createElement('span', { className: 'text-sm text-gray-600' }, `롤: ${rollWidth}×${rollHeight}mm`),
+                        apiKey && React.createElement('span', { className: 'text-sm', style: { color: '#10b981' } }, '✅ OCR')
+                    ),
+
+                    showSettings && React.createElement('div', { className: 'bg-gray-50 p-3 rounded-lg mb-4' },
+                        React.createElement('div', { className: 'grid grid-3 gap-3 mb-3' },
+                            React.createElement('div', null,
+                                React.createElement('label', { className: 'block text-sm font-medium mb-2' }, '롤 가로 (mm)'),
+                                React.createElement('input', {
+                                    type: 'number',
+                                    value: rollWidth,
+                                    onChange: (e) => setRollWidth(parseInt(e.target.value) || 1200),
+                                    className: 'input'
+                                })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', { className: 'block text-sm font-medium mb-2' }, '롤 세로 (mm)'),
+                                React.createElement('input', {
+                                    type: 'number',
+                                    value: rollHeight,
+                                    onChange: (e) => setRollHeight(parseInt(e.target.value) || 50000),
+                                    className: 'input'
+                                })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', { className: 'block text-sm font-medium mb-2' }, '페이지 높이 (mm)'),
+                                React.createElement('input', {
+                                    type: 'number',
+                                    value: pageHeight,
+                                    onChange: (e) => setPageHeight(parseInt(e.target.value) || 2500),
+                                    className: 'input'
+                                })
+                            )
+                        ),
+                        React.createElement('button', {
+                            onClick: () => setShowApiSetup(true),
+                            className: 'btn btn-gray text-sm'
+                        }, '🔑 API 키 설정')
+                    ),
+
+                    React.createElement('div', { className: 'grid grid-4 gap-2 mb-4' },
+                        React.createElement('button', {
+                            onClick: () => fileInputRef.current?.click(),
+                            disabled: isProcessing,
+                            className: 'btn btn-green'
+                        }, isProcessing ? React.createElement('div', { className: 'loading' }) : '📷 사진'),
+                        
+                        React.createElement('button', {
+                            onClick: () => setShowManualInput(!showManualInput),
+                            className: 'btn btn-orange'
+                        }, '➕ 입력'),
+
+                        React.createElement('button', {
+                            onClick: () => { setFilmSizes([]); setOptimizedLayout(null); },
+                            className: 'btn btn-red'
+                        }, '🗑️ 삭제'),
+
+                        React.createElement('button', {
+                            onClick: addSample,
+                            className: 'btn btn-gray'
+                        }, '📋 샘플')
+                    ),
+
+                    React.createElement('input', {
+                        ref: fileInputRef,
+                        type: 'file',
+                        accept: 'image/*',
+                        capture: 'environment',
+                        onChange: handleImageUpload,
+                        className: 'hidden'
+                    }),
+
+                    showManualInput && React.createElement('div', { className: 'mt-4 p-3 bg-blue-50 rounded-lg' },
+                        React.createElement('h3', { className: 'font-medium mb-2 text-sm' }, '사이즈 수동 입력'),
+                        React.createElement('div', { className: 'grid grid-4 gap-2' },
+                            React.createElement('input', {
+                                type: 'number',
+                                value: manualWidth,
+                                onChange: (e) => setManualWidth(e.target.value),
+                                placeholder: '가로',
+                                className: 'input'
+                            }),
+                            React.createElement('input', {
+                                type: 'number',
+                                value: manualHeight,
+                                onChange: (e) => setManualHeight(e.target.value),
+                                placeholder: '세로',
+                                className: 'input'
+                            }),
+                            React.createElement('input', {
+                                type: 'number',
+                                value: manualQuantity,
+                                onChange: (e) => setManualQuantity(e.target.value),
+                                min: '1',
+                                placeholder: '수량',
+                                className: 'input'
+                            }),
+                            React.createElement('button', {
+                                onClick: addManual,
+                                className: 'btn btn-primary'
+                            }, '추가')
+                        )
+                    ),
+
+                    React.createElement('button', {
+                        onClick: optimize,
+                        disabled: filmSizes.length === 0,
+                        className: 'w-full mt-4 btn btn-purple'
+                    }, '🧮 최적 배치 계산')
+                ),
+
+                // 사이즈 목록
+                filmSizes.length > 0 && React.createElement('div', { className: 'card' },
+                    React.createElement('h2', { className: 'font-medium mb-3' }, `필름 사이즈 (${filmSizes.length}개)`),
+                    React.createElement('div', { className: 'grid grid-2 gap-2' },
+                        filmSizes.map(size => 
+                            React.createElement('div', {
+                                key: size.id,
+                                className: 'flex items-center justify-between p-2 border rounded-lg bg-gray-50'
+                            },
+                                React.createElement('div', { className: 'flex items-center gap-2' },
+                                    React.createElement('div', {
+                                        style: {
+                                            width: '16px',
+                                            height: '16px',
+                                            backgroundColor: size.color,
+                                            borderRadius: '4px'
+                                        }
+                                    }),
+                                    React.createElement('div', { className: 'text-sm' },
+                                        React.createElement('div', { className: 'font-medium' }, `${size.width} × ${size.height}mm`),
+                                        React.createElement('div', { className: 'text-gray-600' }, `${size.quantity}개`)
+                                    )
+                                ),
+                                React.createElement('button', {
+                                    onClick: () => setFilmSizes(prev => prev.filter(s => s.id !== size.id)),
+                                    className: 'text-red-500 text-sm p-2'
+                                }, '삭제')
+                            )
+                        )
+                    )
+                ),
+
+                // 빈 상태
+                filmSizes.length === 0 && React.createElement('div', { className: 'card text-center' },
+                    React.createElement('div', { style: { fontSize: '48px', marginBottom: '16px' } },
+                        isProcessing ? '🔄' : '✏️'
+                    ),
+                    React.createElement('p', { className: 'text-gray-600 text-sm' },
+                        isProcessing ? '사진을 분석 중입니다...' : '사진을 촬영하거나 수동으로 사이즈를 추가해보세요'
+                    )
+                ),
+
+                // 최적화 결과
+                optimizedLayout && React.createElement('div', { className: 'card' },
+                    React.createElement('h2', { className: 'font-medium mb-3' }, '배치 결과'),
+                    
+                    React.createElement('div', { className: 'grid grid-3 gap-3 mb-4' },
+                        React.createElement('div', { style: { background: '#ecfdf5' }, className: 'p-3 rounded-lg text-center' },
+                            React.createElement('p', { className: 'text-sm text-gray-600' }, '사용 길이'),
+                            React.createElement('p', { className: 'text-lg font-bold', style: { color: '#059669' } },
+                                `${(optimizedLayout.totalUsedHeight/1000).toFixed(1)}m`
+                            )
+                        ),
+                        React.createElement('div', { className: 'bg-gray-50 p-3 rounded-lg text-center' },
+                            React.createElement('p', { className: 'text-sm text-gray-600' }, '남은 길이'),
+                            React.createElement('p', { className: 'text-lg font-bold text-gray-600' },
+                                `${(optimizedLayout.remaining/1000).toFixed(1)}m`
+                            )
+                        ),
+                        React.createElement('div', { style: { background: '#eff6ff' }, className: 'p-3 rounded-lg text-center' },
+                            React.createElement('p', { className: 'text-sm text-gray-600' }, '효율성'),
+                            React.createElement('p', { className: 'text-lg font-bold', style: { color: '#2563eb' } },
+                                `${optimizedLayout.efficiency}%`
+                            )
+                        )
+                    ),
+
+                    React.createElement('div', { className: 'flex items-center justify-between mb-4 gap-2' },
+                        totalPages > 1 && React.createElement('div', { className: 'flex items-center gap-2' },
+                            React.createElement('button', {
+                                onClick: () => setCurrentPage(Math.max(0, currentPage - 1)),
+                                disabled: currentPage === 0,
+                                className: 'p-2 border rounded'
+                            }, '⬅️'),
+                            React.createElement('span', { className: 'text-sm p-2 bg-blue-50 rounded' },
+                                `${currentPage + 1} / ${totalPages}`
+                            ),
+                            React.createElement('button', {
+                                onClick: () => setCurrentPage(Math.min(totalPages - 1, currentPage + 1)),
+                                disabled: currentPage === totalPages - 1,
+                                className: 'p-2 border rounded'
+                            }, '➡️')
+                        ),
+
+                        React.createElement('div', { className: 'flex items-center gap-1' },
+                            React.createElement('button', {
+                                onClick: () => setZoomLevel(Math.max(0.3, zoomLevel - 0.1)),
+                                className: 'p-2 border rounded'
+                            }, '🔍➖'),
+                            React.createElement('span', { className: 'text-sm p-2 bg-gray-50 rounded' },
+                                `${(zoomLevel * 100).toFixed(0)}%`
+                            ),
+                            React.createElement('button', {
+                                onClick: () => setZoomLevel(Math.min(2, zoomLevel + 0.1)),
+                                className: 'p-2 border rounded'
+                            }, '🔍➕')
+                        ),
+
+                        React.createElement('div', { className: 'flex items-center gap-2' },
+                            React.createElement('span', { className: 'text-sm' }, '번호'),
+                            React.createElement('input', {
+                                type: 'range',
+                                min: '0',
+                                max: '30',
+                                value: pageOpacity,
+                                onChange: (e) => setPageOpacity(parseInt(e.target.value)),
+                                style: { width: '60px' }
+                            }),
+                            React.createElement('span', { className: 'text-sm' }, `${pageOpacity}%`)
+                        )
+                    ),
+
+                    React.createElement('div', {
+                        style: {
+                            border: '2px solid #374151',
+                            background: 'white',
+                            height: '60vh',
+                            overflow: 'auto'
+                        }
+                    },
+                        React.createElement('div', {
+                            style: {
+                                position: 'relative',
+                                background: 'white',
+                                width: `${300 * zoomLevel}px`,
+                                height: `${(pageHeight / rollWidth) * 300 * zoomLevel}px`,
+                                minHeight: '200px'
+                            }
+                        },
+                            pageOpacity > 0 && React.createElement('div', {
+                                style: {
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: `${Math.max(24, 36 * zoomLevel)}px`,
+                                    color: `rgba(255, 255, 255, ${pageOpacity / 100})`,
+                                    fontWeight: 'bold',
+                                    textShadow: `2px 2px 4px rgba(0, 0, 0, ${pageOpacity / 100})`,
+                                    zIndex: 10,
+                                    pointerEvents: 'none'
+                                }
+                            }, currentPage + 1),
+
+                            currentPieces.map((piece) => {
+                                const pieceStart = piece.y;
+                                const pieceEnd = piece.y + piece.height;
+                                const visibleStart = Math.max(pieceStart, pageStart);
+                                const visibleEnd = Math.min(pieceEnd, pageEnd);
+                                const visibleHeight = visibleEnd - visibleStart;
+                                
+                                if (visibleHeight <= 0) return null;
+                                
+                                const relativeY = visibleStart - pageStart;
+                                const scale = (300 / rollWidth) * zoomLevel;
+                                const shouldRotate = piece.height > piece.width * 2 && zoomLevel > 0.5;
+                                
+                                return React.createElement('div', {
+                                    key: piece.pieceId,
+                                    style: {
+                                        position: 'absolute',
+                                        left: `${piece.x * scale}px`,
+                                        top: `${relativeY * scale}px`,
+                                        width: `${piece.width * scale}px`,
+                                        height: `${visibleHeight * scale}px`,
+                                        backgroundColor: piece.color,
+                                        border: '2px solid #374151',
+                                        minHeight: '10px',
+                                        minWidth: '15px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        fontSize: `${Math.max(8, 10 * zoomLevel)}px`,
+                                        fontWeight: 'bold'
+                                    },
+                                    title: `${piece.width}×${piece.height}mm`
+                                },
+                                    zoomLevel > 0.6 && React.createElement('div', {
+                                        style: {
+                                            textAlign: 'center',
+                                            transform: shouldRotate ? 'rotate(-90deg)' : 'none',
+                                            whiteSpace: 'nowrap',
+                                            lineHeight: '1.2'
+                                        }
+                                    },
+                                        React.createElement('div', null, `${piece.width}×${piece.height}`),
+                                        piece.height > pageHeight && React.createElement('div', {
+                                            style: { color: '#ef4444', fontSize: '0.8em' }
+                                        }, '다중')
+                                    )
+                                );
+                            })
+                        )
+                    ),
+
+                    currentPieces.length > 0 && React.createElement('div', { className: 'mt-4 p-3 bg-blue-50 rounded-lg' },
+                        React.createElement('h4', { className: 'font-medium mb-2 text-sm' }, `페이지 ${currentPage + 1} 조각:`),
+                        React.createElement('div', { className: 'grid grid-3 gap-2 text-sm' },
+                            currentPieces.map((piece) => 
+                                React.createElement('div', {
+                                    key: piece.pieceId,
+                                    className: 'flex items-center gap-1'
+                                },
+                                    React.createElement('div', {
+                                        style: {
+                                            width: '12px',
+                                            height: '12px',
+                                            borderRadius: '2px',
+                                            backgroundColor: piece.color
+                                        }
+                                    }),
+                                    React.createElement('span', null, `${piece.width}×${piece.height}mm`)
+                                )
+                            )
+                        )
+                    ),
+
+                    React.createElement('div', { className: 'mt-4 p-3 bg-yellow-50 rounded-lg' },
+                        React.createElement('h4', { className: 'font-medium mb-2 text-sm' }, '사용법'),
+                        React.createElement('div', { className: 'text-sm text-gray-600' },
+                            React.createElement('p', null, '• 📷 사진: 노트의 손필기 사이즈를 촬영하여 자동 인식'),
+                            React.createElement('p', null, '• 🧮 배치: 공간 효율성을 최대화한 최적 배치'),
+                            React.createElement('p', null, '• 🔍 줌: 30%~200% 조절로 세부 확인'),
+                            React.createElement('p', null, '• 📋 인식: "450×1600 3개", "450 1600 3" 등')
+                        )
+                    )
+                )
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
